@@ -3,12 +3,57 @@
 namespace App\Http\Controllers\Api;
 
 use App\Models\Product;
+use App\Models\Purchase;
 use App\Models\Sale;
+use App\Models\WasteRecord;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class SaleController
 {
+    /**
+     * API គណនាទិន្នន័យប្រតិបត្តិការប្រចាំថ្ងៃសម្រាប់ Dashboard
+     */
+    public function dashboardStats(Request $request)
+    {
+        // យក business_id ពី user ដែល login ឬ fallback 1 បើតេស្តដោយគ្មាន auth token
+        $businessId = $request->user()?->business_id ?? 1;
+        $today = now()->toDateString();
+
+        // 1. Revenue ថ្ងៃនេះ (បូកសរុបទាំងពី Telegram Bot និង Web)
+        $revenue = (float) Sale::where('business_id', $businessId)
+            ->whereDate('sold_at', $today)
+            ->sum('total_amount');
+
+        // 2. Sales Count ថ្ងៃនេះ
+        $salesCount = Sale::where('business_id', $businessId)
+            ->whereDate('sold_at', $today)
+            ->count();
+
+        // 3. Purchase Value ថ្ងៃនេះ
+        $purchaseValue = (float) Purchase::where('business_id', $businessId)
+            ->whereDate('purchase_date', $today)
+            ->sum('total_amount');
+
+        // 4. Waste ថ្ងៃនេះ
+        $waste = (float) WasteRecord::where('business_id', $businessId)
+            ->whereDate('recorded_at', $today)
+            ->selectRaw('COALESCE(SUM(quantity * unit_cost_snapshot), 0) as total')
+            ->value('total');
+
+        // 5. បញ្ជីទំនិញក្នុងស្តុកសម្រាប់ Dropdown (Quick Sale / Quick Purchase)
+        $products = Product::where('business_id', $businessId)->get();
+
+        return response()->json([
+            'revenue' => $revenue,
+            'expenses' => $purchaseValue + $waste,
+            'purchaseValue' => $purchaseValue,
+            'waste' => $waste,
+            'salesCount' => $salesCount,
+            'products' => $products
+        ]);
+    }
+
     public function index(Request $request)
     {
         return response()->json(

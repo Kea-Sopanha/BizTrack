@@ -38,6 +38,7 @@ export default function App() {
   const [saleForm, setSaleForm] = useState({ productId: '', quantity: '1', unitPrice: '0' });
   const [purchaseForm, setPurchaseForm] = useState({ productId: '', quantity: '1', unitCost: '0' });
 
+  // ទាញយកទិន្នន័យ Dashboard & Products
   const fetchDashboard = async () => {
     if (!token) return;
 
@@ -54,10 +55,27 @@ export default function App() {
     }
   };
 
+  // Real-time Background Polling: Sync ទិន្នន័យពី Telegram Bot រៀងរាល់ 3 វិនាទី
   useEffect(() => {
-    if (token) {
-      fetchDashboard();
-    }
+    if (!token) return;
+
+    fetchDashboard();
+
+    const interval = setInterval(() => {
+      Promise.all([
+        apiFetch('/dashboard'),
+        apiFetch('/products'),
+      ])
+        .then(([dashboardData, productList]) => {
+          setDashboard(dashboardData);
+          setProducts(productList);
+        })
+        .catch((err) => {
+          console.error('Background sync failed:', err);
+        });
+    }, 3000);
+
+    return () => clearInterval(interval);
   }, [token]);
 
   const handleChange = (event) => {
@@ -122,10 +140,12 @@ export default function App() {
       ];
 
       await Promise.all(
-        demoProducts.map((product) => apiFetch('/products', {
-          method: 'POST',
-          body: JSON.stringify(product),
-        }))
+        demoProducts.map((product) =>
+          apiFetch('/products', {
+            method: 'POST',
+            body: JSON.stringify(product),
+          })
+        )
       );
 
       await fetchDashboard();
@@ -147,11 +167,13 @@ export default function App() {
         body: JSON.stringify({
           sold_at: new Date().toISOString(),
           notes: 'Quick sale from demo dashboard',
-          items: [{
-            product_id: Number(saleForm.productId),
-            quantity: Number(saleForm.quantity || 1),
-            unit_price: Number(saleForm.unitPrice || 0),
-          }],
+          items: [
+            {
+              product_id: Number(saleForm.productId),
+              quantity: Number(saleForm.quantity || 1),
+              unit_price: Number(saleForm.unitPrice || 0),
+            },
+          ],
         }),
       });
 
@@ -177,11 +199,13 @@ export default function App() {
           purchase_date: new Date().toISOString().split('T')[0],
           reference_no: 'DEMO-001',
           notes: 'Quick purchase from demo dashboard',
-          items: [{
-            product_id: Number(purchaseForm.productId),
-            quantity: Number(purchaseForm.quantity || 1),
-            unit_cost: Number(purchaseForm.unitCost || 0),
-          }],
+          items: [
+            {
+              product_id: Number(purchaseForm.productId),
+              quantity: Number(purchaseForm.quantity || 1),
+              unit_cost: Number(purchaseForm.unitCost || 0),
+            },
+          ],
         }),
       });
 
@@ -201,15 +225,16 @@ export default function App() {
 
     try {
       const endpoint = authMode === 'login' ? '/login' : '/register';
-      const payload = authMode === 'login'
-        ? { email: form.email, password: form.password }
-        : {
-            name: form.name,
-            email: form.email,
-            password: form.password,
-            business_name: form.business_name,
-            role: form.role,
-          };
+      const payload =
+        authMode === 'login'
+          ? { email: form.email, password: form.password }
+          : {
+              name: form.name,
+              email: form.email,
+              password: form.password,
+              business_name: form.business_name,
+              role: form.role,
+            };
 
       const result = await apiFetch(endpoint, {
         method: 'POST',
@@ -258,7 +283,9 @@ export default function App() {
             <h1 className="mt-2 text-2xl font-bold">Smart Daily Records & Business Insights</h1>
           </div>
           <div className="flex items-center gap-3">
-            <span className="rounded-full bg-emerald-500/20 px-3 py-1 text-sm font-medium text-emerald-200">{token ? 'Owner' : 'Guest'}</span>
+            <span className="rounded-full bg-emerald-500/20 px-3 py-1 text-sm font-medium text-emerald-200">
+              {token ? 'Owner' : 'Guest'}
+            </span>
             <span className="rounded-full bg-slate-700 px-3 py-1 text-sm text-slate-200">
               {dashboard?.business?.name || 'Business'}
             </span>
