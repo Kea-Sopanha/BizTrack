@@ -11,6 +11,7 @@ use App\Models\WasteRecord;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class TelegramBotController
 {
@@ -19,7 +20,8 @@ class TelegramBotController
         $token = env('TELEGRAM_BOT_TOKEN');
         $secret = env('TELEGRAM_WEBHOOK_SECRET');
 
-        if ($secret && $request->header('X-Telegram-Bot-Api-Secret-Token') !== $secret) {
+        // Check secret token only if it is configured in .env
+        if (!empty($secret) && $request->header('X-Telegram-Bot-Api-Secret-Token') !== $secret) {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 
@@ -41,7 +43,7 @@ class TelegramBotController
 
         if (! $user) {
             if ($token) {
-                Http::post("https://api.telegram.org/bot{$token}/sendMessage", [
+                Http::withoutVerifying()->post("https://api.telegram.org/bot{$token}/sendMessage", [
                     'chat_id' => $chatId,
                     'text' => 'BizTrack Telegram is not linked to your account yet. Please connect your Telegram chat in the BizTrack app first.',
                 ]);
@@ -53,7 +55,7 @@ class TelegramBotController
         $trimmed = strtolower($text);
         $reply = null;
 
-        if (in_array($trimmed, ['help', '/help', 'menu'])) {
+        if (in_array($trimmed, ['help', '/help', '/start', 'menu'])) {
             $reply = "BizTrack commands:\n- sale <product> <qty> <price>\n- purchase <product> <qty> <cost>\n- waste <product> <qty> <reason>\n- start shift\n- close shift\n- today\nExample: sale Milk 4 3.5";
         }
         elseif (preg_match('/^sale\s+(.+?)\s+(\d+)\s+([0-9]+(?:\.[0-9]+)?)$/i', $text, $matches)) {
@@ -76,9 +78,14 @@ class TelegramBotController
             }
             else {
                 DB::transaction(function () use ($user, $product, $quantity, $unitPrice) {
+                    $openShiftId = Shift::where('business_id', $user->business_id)
+                        ->where('user_id', $user->id)
+                        ->where('status', 'open')
+                        ->value('id');
+
                     $sale = Sale::create([
                         'business_id' => $user->business_id,
-                        'shift_id' => Shift::where('business_id', $user->business_id)->where('user_id', $user->id)->where('status', 'open')->value('id'),
+                        'shift_id' => $openShiftId,
                         'user_id' => $user->id,
                         'sale_no' => 'TG-SALE-' . now()->timestamp,
                         'sold_at' => now(),
@@ -91,7 +98,7 @@ class TelegramBotController
                         'product_id' => $product->id,
                         'quantity' => $quantity,
                         'unit_price' => $unitPrice,
-                        'unit_cost_snapshot' => $product->default_cost,
+                        'unit_cost_snapshot' => $product->default_cost ?? 0,
                         'line_total' => $lineTotal,
                     ]);
 
@@ -122,9 +129,14 @@ class TelegramBotController
             }
             else {
                 DB::transaction(function () use ($user, $product, $quantity, $unitCost) {
+                    $openShiftId = Shift::where('business_id', $user->business_id)
+                        ->where('user_id', $user->id)
+                        ->where('status', 'open')
+                        ->value('id');
+
                     $purchase = Purchase::create([
                         'business_id' => $user->business_id,
-                        'shift_id' => Shift::where('business_id', $user->business_id)->where('user_id', $user->id)->where('status', 'open')->value('id'),
+                        'shift_id' => $openShiftId,
                         'user_id' => $user->id,
                         'supplier_name' => 'Telegram Bot',
                         'purchase_date' => now()->toDateString(),
@@ -154,7 +166,7 @@ class TelegramBotController
         elseif (preg_match('/^waste\s+(.+?)\s+(\d+)(?:\s+(.*))?$/i', $text, $matches)) {
             $productName = trim($matches[1]);
             $quantity = (int) $matches[2];
-            $reason = trim($matches[3] ?: 'telegram');
+            $reason = trim($matches[3] ?? 'telegram');
 
             $product = Product::where('business_id', $user->business_id)
                 ->where(function ($query) use ($productName) {
@@ -171,13 +183,18 @@ class TelegramBotController
             }
             else {
                 DB::transaction(function () use ($user, $product, $quantity, $reason) {
+                    $openShiftId = Shift::where('business_id', $user->business_id)
+                        ->where('user_id', $user->id)
+                        ->where('status', 'open')
+                        ->value('id');
+
                     WasteRecord::create([
                         'business_id' => $user->business_id,
-                        'shift_id' => Shift::where('business_id', $user->business_id)->where('user_id', $user->id)->where('status', 'open')->value('id'),
+                        'shift_id' => $openShiftId,
                         'user_id' => $user->id,
                         'product_id' => $product->id,
                         'quantity' => $quantity,
-                        'unit_cost_snapshot' => $product->default_cost,
+                        'unit_cost_snapshot' => $product->default_cost ?? 0,
                         'reason' => $reason,
                         'notes' => 'Telegram bot waste',
                         'recorded_at' => now(),
@@ -244,11 +261,15 @@ class TelegramBotController
             $reply = 'Unknown command. Use /help to see valid Telegram BizTrack commands.';
         }
 
-        if ($token) {
-            Http::post("https://api.telegram.org/bot{$token}/sendMessage", [
-                'chat_id' => $chatId,
-                'text' => $reply,
-            ]);
+        if ($token && $reply) {
+            try {
+                Http::withoutVerifying()->post("https://api.telegram.org/bot{$token}/sendMessage", [
+                    'chat_id' => $chatId,
+                    'text' => $reply,
+                ]);
+            } catch (\Exception $e) {
+                Log::error('Telegram sendMessage error: ' . $e->getMessage());
+            }
         }
 
         return response()->json(['ok' => true]);
